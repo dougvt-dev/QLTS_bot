@@ -1,0 +1,27 @@
+backend/experiments/
+backend/*.log
+backend/agent_args.txt
+
+
+# Python cache
+backend/__pycache__/
+backend/*.py[cod]
+
+# Editor
+.vscode/
+
+# Test files
+backend/test.py
+backend/test_*.py
+backend/*_test.py
+backend/tests/
+
+# env files
+backend/.env
+# Python cache (mọi cấp thư mục)
+__pycache__/
+*.py[cod]
+
+# Build frontend
+frontend/dist/
+*.tsbuildinfo
