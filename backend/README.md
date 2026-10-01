@@ -1,79 +1,109 @@
-# Phát triển API Text-to-SQL cho Quản lý tài sản
+# Backend – Chatbot Text-to-SQL quản lý tài sản
 
-Dựa trên code thử nghiệm từ `experiments/qlts-db.ipynb`, chúng ta sẽ xây dựng một API RESTful bằng FastAPI. API này sẽ nhận câu hỏi tự nhiên từ người dùng, sử dụng agent để truy vấn database SQL Server và trả về kết quả. 
+API FastAPI cho phép hỏi đáp bằng ngôn ngữ tự nhiên về dữ liệu tài sản/nội thất (SQL Server) và trò chuyện, giải đáp kiến thức chung. Sử dụng LangChain/LangGraph agent với Google Gemini.
 
-## Cấu trúc thư mục đề xuất
+## Tính năng
+- Tra cứu dữ liệu tài sản bằng tiếng Việt: agent tự xem schema, viết và chạy câu `SELECT`, rồi diễn giải kết quả.
+- Trò chuyện và trả lời kiến thức chung (không dùng DB).
+- Nhớ ngữ cảnh hội thoại theo `thread_id`.
+- Nhiều lớp bảo vệ: lọc prompt injection, kiểm tra SQL trước khi chạy, DB chỉ cấp quyền đọc.
 
-Chúng ta sẽ tận dụng cấu trúc thư mục hiện có trong `src` và bổ sung các thành phần cần thiết:
+## Cấu trúc thư mục
 
 ```text
-src/
-├── main.py                # Điểm vào của ứng dụng FastAPI
-├── app/
-│   ├── api.py             # Định nghĩa các routes/endpoints (vd: POST /chat)
-│   └── agent.py           # Logic LangChain/LangGraph agent từ notebook
-├── models/
-│   └── schemas.py         # Pydantic models cho Request/Response API
-└── utils/
-    └── config.py          # Quản lý cấu hình, biến môi trường (Database, API Keys)
+backend/
+├── src/
+│   ├── main.py            # Điểm vào FastAPI, gắn router /api
+│   ├── app/
+│   │   ├── api.py         # Endpoint POST /api/chat, điều phối luồng xử lý
+│   │   └── agent.py       # Dựng model Gemini, tools SQL và agent
+│   ├── models/
+│   │   └── schemas.py     # Pydantic: ChatRequest, ChatResponse
+│   └── utils/
+│       ├── config.py      # Đọc biến môi trường, tạo chuỗi kết nối DB
+│       ├── guard.py       # Lọc đầu vào + kiểm tra/chặn SQL nguy hiểm
+│       └── prompt.py      # System prompt của agent
+├── experiments/           # Notebook thử nghiệm (không đưa lên git)
+├── requirements.txt       # Thư viện Python
+├── .env.example           # Mẫu biến môi trường
+└── README.md
 ```
 
-## Các thay đổi chính (Proposed Changes)
+## Luồng xử lý
 
-### 1. Cập nhật `requirements.txt`
-Bổ sung các thư viện cần thiết cho API và kết nối database:
-- `fastapi`, `uvicorn` (cho API server)
-- `pydantic` (cho data validation)
-- `pyodbc`, `sqlalchemy` (cho kết nối SQL Server)
-- `langchain-google-genai` (cho model Gemini)
-- `python-dotenv` (cho biến môi trường)
-
-### 2. Tạo file môi trường `.env`
-Di chuyển các thông tin nhạy cảm từ code vào file `.env` (không đưa lên git) hoặc quản lý cấu hình:
-- Cấu hình SQL Server (`DB_SERVER`, `DB_NAME`, `DB_USER`, `DB_PASS`)
-- Cấu hình Gemini (`GOOGLE_API_KEY`)
-
-### 3. `src/utils/config.py`
-Tạo module quản lý cấu hình và khởi tạo chuỗi kết nối Database (`connection_url`).
-
-### 4. `src/app/agent.py`
-Đưa logic khởi tạo model, kết nối DB và thiết lập tool/agent từ notebook vào một class hoặc các function quản lý vòng đời rõ ràng:
-- Khởi tạo `SQLDatabase` và `ChatGoogleGenerativeAI`.
-- Cấu hình `SQLDatabaseToolkit` và lấy các tools.
-- Tái tạo `system_prompt` và hàm `create_agent()`.
-
-### 5. `src/models/schemas.py`
-Tạo request model:
-```python
-class ChatRequest(BaseModel):
-    question: str
-
-class ChatResponse(BaseModel):
-    answer: str
+```text
+Client ── POST /api/chat ──► Pydantic (độ dài câu hỏi)
+                              ──► check_user_input (lọc injection)
+                              ──► agent (Gemini + tools, nhớ theo thread_id)
+                                    ├─ kiến thức chung / chào hỏi → trả lời trực tiếp
+                                    └─ cần dữ liệu → list_tables → schema → query
+                                                         └─ validate_sql (guard) → SQL Server
+                              ──► ChatResponse { answer, thread_id }
 ```
 
-### 6. `src/app/api.py` & `src/main.py`
-Tạo endpoint POST `/api/chat` nhận câu hỏi, gọi agent xử lý và trả về câu trả lời. Gắn router vào ứng dụng FastAPI trong `main.py`.
+Các lớp phòng thủ theo thứ tự: schema Pydantic → bộ lọc injection → prompt bảo mật → `validate_sql` (chỉ một câu `SELECT`, không chú thích/`;`/`EXEC`, bảng hợp lệ, có `TOP` ≤ 100 hoặc truy vấn tổng hợp) → tài khoản DB chỉ có quyền `SELECT`.
 
-## User Review Required
+## Yêu cầu
+- Python 3.10+ (đã chạy với 3.12)
+- **ODBC Driver 18 for SQL Server** (cài ở mức hệ điều hành, không qua pip)
+- Truy cập được SQL Server và có Google API key (Gemini)
 
-> [!IMPORTANT]
-> **Quyết định về Framework API**: Tôi đề xuất sử dụng **FastAPI** vì nó hiện đại, nhanh và hỗ trợ tốt cho Python. Bạn có đồng ý sử dụng FastAPI không?
-> 
-> **Quản lý mật khẩu**: Trong notebook, mật khẩu có chứa ký tự `@` được encode thành `%40` cho URL. Tôi sẽ sử dụng `urllib.parse.quote_plus` để tự động xử lý các ký tự đặc biệt này, giúp ứng dụng an toàn và linh hoạt hơn với mọi loại mật khẩu.
+## Cài đặt và chạy
 
-## Open Questions
+```bash
+cd backend
+pip install -r requirements.txt
 
-> [!NOTE]
-> 1. Bạn có muốn lưu trữ lịch sử chat của user không? Hay API chỉ xử lý từng câu hỏi riêng lẻ không có ngữ cảnh trước đó (stateless)?
-> 2. Có thiết lập bảo mật API Key (Authentication) nào cho endpoint API này không, hay có thể truy cập công khai trong nội bộ mạng?
+cp .env.example .env      # rồi điền giá trị thật
+uvicorn src.main:app --reload
+```
 
-## Verification Plan
+Swagger UI: http://localhost:8000/docs
 
-### Automated Tests
-1. Cài đặt các thư viện mới (nếu bạn đồng ý, tôi sẽ chạy lệnh `pip install -r requirements.txt`).
-2. Khởi chạy server FastAPI bằng lệnh `uvicorn src.main:app --reload`.
-3. Gửi request POST thử nghiệm tới API `/api/chat` với câu hỏi mẫu (ví dụ: "Có bao nhiêu loại tài sản ?") và kiểm tra JSON response trả về.
+## Cấu hình (`.env`)
 
-### Manual Verification
-- Bạn có thể dùng Postman, cURL hoặc Swagger UI tích hợp sẵn của FastAPI (truy cập `http://localhost:8000/docs`) để thử nghiệm gửi câu hỏi và xem kết quả.
+| Biến | Bắt buộc | Mô tả |
+|---|---|---|
+| `DB_SERVER` | có | Địa chỉ SQL Server |
+| `DB_NAME` | có | Tên CSDL (vd: `QLTS`) |
+| `DB_USER` | có | Tài khoản DB (khuyến nghị chỉ quyền `SELECT`) |
+| `DB_PASS` | có | Mật khẩu DB |
+| `GOOGLE_API_KEY` | có | API key Gemini |
+| `MODEL_NAME` | không | Model Gemini, mặc định `gemini-2.5-flash-lite` |
+
+> Không commit file `.env`. File này đã nằm trong `.gitignore`.
+
+## API
+
+### `POST /api/chat`
+
+Request:
+```json
+{ "question": "Có bao nhiêu loại tài sản?", "thread_id": "tùy chọn" }
+```
+- `question`: 1–1000 ký tự.
+- `thread_id`: không bắt buộc (tối đa 64 ký tự). Nếu bỏ trống, server tự sinh. Gửi lại cùng giá trị ở các lượt sau để giữ ngữ cảnh.
+
+Response:
+```json
+{ "answer": "…", "thread_id": "…" }
+```
+
+| Mã | Ý nghĩa |
+|---|---|
+| 200 | Thành công (kể cả khi câu hỏi bị bộ lọc từ chối, `answer` là thông báo từ chối) |
+| 422 | Dữ liệu đầu vào không hợp lệ |
+| 503 | Chưa khởi tạo được agent (vd: không kết nối được DB) |
+| 500 | Lỗi nội bộ khi xử lý |
+
+Ví dụ:
+```bash
+curl -X POST http://localhost:8000/api/chat \
+  -H "Content-Type: application/json" \
+  -d '{"question": "Có bao nhiêu loại tài sản?"}'
+```
+
+## Lưu ý
+- Lịch sử hội thoại lưu trong RAM (`InMemorySaver`): mất khi restart, không chia sẻ giữa nhiều worker.
+- Chưa có xác thực và CORS; cần bổ sung trước khi mở cho người dùng bên ngoài.
+- Agent được tạo ở request `/chat` đầu tiên, nên app vẫn khởi động được khi DB tạm thời không truy cập được.
